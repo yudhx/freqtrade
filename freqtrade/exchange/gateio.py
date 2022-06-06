@@ -42,24 +42,18 @@ class Gateio(Exchange):
     def validate_ordertypes(self, order_types: Dict) -> None:
         super().validate_ordertypes(order_types)
 
-        if self.trading_mode != TradingMode.FUTURES:
-            if any(v == 'market' for k, v in order_types.items()):
-                raise OperationalException(
-                    f'Exchange {self.name} does not support market orders.')
+        if self.trading_mode != TradingMode.FUTURES and any(
+            v == 'market' for k, v in order_types.items()
+        ):
+            raise OperationalException(
+                f'Exchange {self.name} does not support market orders.')
 
     def get_trades_for_order(self, order_id: str, pair: str, since: datetime,
                              params: Optional[Dict] = None) -> List:
         trades = super().get_trades_for_order(order_id, pair, since, params)
 
         if self.trading_mode == TradingMode.FUTURES:
-            # Futures usually don't contain fees in the response.
-            # As such, futures orders on gateio will not contain a fee, which causes
-            # a repeated "update fee" cycle and wrong calculations.
-            # Therefore we patch the response with fees if it's not available.
-            # An alternative also contianing fees would be
-            # privateFuturesGetSettleAccountBook({"settle": "usdt"})
-            pair_fees = self._trading_fees.get(pair, {})
-            if pair_fees:
+            if pair_fees := self._trading_fees.get(pair, {}):
                 for idx, trade in enumerate(trades):
                     if trade.get('fee', {}).get('cost') is None:
                         takerOrMaker = trade.get('takerOrMaker', 'taker')

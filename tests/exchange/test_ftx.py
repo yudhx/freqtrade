@@ -20,7 +20,7 @@ STOPLOSS_ORDERTYPE = 'stop'
 ])
 def test_stoploss_order_ftx(default_conf, mocker, order_price, exchangelimitratio, side):
     api_mock = MagicMock()
-    order_id = 'test_prod_buy_{}'.format(randint(0, 10 ** 6))
+    order_id = f'test_prod_buy_{randint(0, 10 ** 6)}'
 
     api_mock.create_order = MagicMock(return_value={
         'id': order_id,
@@ -223,8 +223,6 @@ def test_fetch_stoploss_order_ftx(default_conf, mocker, limit_sell_order, limit_
     assert resp
     # fetch_order not called (no regular order ID)
     assert api_mock.fetch_order.call_count == 0
-    assert order == order
-
     with pytest.raises(InvalidOrderException):
         api_mock.fetch_orders = MagicMock(side_effect=ccxt.InvalidOrder("Order not found"))
         exchange = get_patched_exchange(mocker, default_conf, api_mock, id='ftx')

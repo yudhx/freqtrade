@@ -26,10 +26,12 @@ def _extend_validator(validator_class):
             if 'default' in subschema:
                 instance.setdefault(prop, subschema['default'])
 
-        for error in validate_properties(
-            validator, properties, instance, schema,
-        ):
-            yield error
+        yield from validate_properties(
+            validator,
+            properties,
+            instance,
+            schema,
+        )
 
     return validators.extend(
         validator_class, {'properties': set_defaults}
@@ -129,9 +131,7 @@ def _validate_trailing_stoploss(conf: Dict[str, Any]) -> None:
 
     tsl_positive = float(conf.get('trailing_stop_positive', 0))
     tsl_offset = float(conf.get('trailing_stop_positive_offset', 0))
-    tsl_only_offset = conf.get('trailing_only_offset_is_reached', False)
-
-    if tsl_only_offset:
+    if tsl_only_offset := conf.get('trailing_only_offset_is_reached', False):
         if tsl_positive == 0.0:
             raise OperationalException(
                 'The config trailing_only_offset_is_reached needs '
@@ -206,14 +206,13 @@ def _validate_ask_orderbook(conf: Dict[str, Any]) -> None:
                 "Using order_book_max != order_book_min in exit_pricing is no longer supported."
                 "Please pick one value and use `order_book_top` in the future."
             )
-        else:
-            # Move value to order_book_top
-            ask_strategy['order_book_top'] = ob_min
-            logger.warning(
-                "DEPRECATED: "
-                "Please use `order_book_top` instead of `order_book_min` and `order_book_max` "
-                "for your `exit_pricing` configuration."
-            )
+        # Move value to order_book_top
+        ask_strategy['order_book_top'] = ob_min
+        logger.warning(
+            "DEPRECATED: "
+            "Please use `order_book_top` instead of `order_book_min` and `order_book_max` "
+            "for your `exit_pricing` configuration."
+        )
 
 
 def validate_migrated_strategy_settings(conf: Dict[str, Any]) -> None:
@@ -232,16 +231,15 @@ def _validate_time_in_force(conf: Dict[str, Any]) -> None:
         if conf.get('trading_mode', TradingMode.SPOT) != TradingMode.SPOT:
             raise OperationalException(
                 "Please migrate your time_in_force settings to use 'entry' and 'exit'.")
-        else:
-            logger.warning(
-                "DEPRECATED: Using 'buy' and 'sell' for time_in_force is deprecated."
-                "Please migrate your time_in_force settings to use 'entry' and 'exit'."
-            )
-            process_deprecated_setting(
-                conf, 'order_time_in_force', 'buy', 'order_time_in_force', 'entry')
+        logger.warning(
+            "DEPRECATED: Using 'buy' and 'sell' for time_in_force is deprecated."
+            "Please migrate your time_in_force settings to use 'entry' and 'exit'."
+        )
+        process_deprecated_setting(
+            conf, 'order_time_in_force', 'buy', 'order_time_in_force', 'entry')
 
-            process_deprecated_setting(
-                conf, 'order_time_in_force', 'sell', 'order_time_in_force', 'exit')
+        process_deprecated_setting(
+            conf, 'order_time_in_force', 'sell', 'order_time_in_force', 'exit')
 
 
 def _validate_order_types(conf: Dict[str, Any]) -> None:
@@ -253,23 +251,22 @@ def _validate_order_types(conf: Dict[str, Any]) -> None:
         if conf.get('trading_mode', TradingMode.SPOT) != TradingMode.SPOT:
             raise OperationalException(
                 "Please migrate your order_types settings to use the new wording.")
-        else:
-            logger.warning(
-                "DEPRECATED: Using 'buy' and 'sell' for order_types is deprecated."
-                "Please migrate your order_types settings to use 'entry' and 'exit' wording."
-            )
-            for o, n in [
-                ('buy', 'entry'),
-                ('sell', 'exit'),
-                ('emergencysell', 'emergency_exit'),
-                ('forcesell', 'force_exit'),
-                ('forcebuy', 'force_entry'),
-                ('emergencyexit', 'emergency_exit'),
-                ('forceexit', 'force_exit'),
-                ('forceentry', 'force_entry'),
-            ]:
+        logger.warning(
+            "DEPRECATED: Using 'buy' and 'sell' for order_types is deprecated."
+            "Please migrate your order_types settings to use 'entry' and 'exit' wording."
+        )
+        for o, n in [
+            ('buy', 'entry'),
+            ('sell', 'exit'),
+            ('emergencysell', 'emergency_exit'),
+            ('forcesell', 'force_exit'),
+            ('forcebuy', 'force_entry'),
+            ('emergencyexit', 'emergency_exit'),
+            ('forceexit', 'force_exit'),
+            ('forceentry', 'force_entry'),
+        ]:
 
-                process_deprecated_setting(conf, 'order_types', o, 'order_types', n)
+            process_deprecated_setting(conf, 'order_types', o, 'order_types', n)
 
 
 def _validate_unfilledtimeout(conf: Dict[str, Any]) -> None:
@@ -278,49 +275,46 @@ def _validate_unfilledtimeout(conf: Dict[str, Any]) -> None:
         if conf.get('trading_mode', TradingMode.SPOT) != TradingMode.SPOT:
             raise OperationalException(
                 "Please migrate your unfilledtimeout settings to use the new wording.")
-        else:
+        logger.warning(
+            "DEPRECATED: Using 'buy' and 'sell' for unfilledtimeout is deprecated."
+            "Please migrate your unfilledtimeout settings to use 'entry' and 'exit' wording."
+        )
+        for o, n in [
+            ('buy', 'entry'),
+            ('sell', 'exit'),
+        ]:
 
-            logger.warning(
-                "DEPRECATED: Using 'buy' and 'sell' for unfilledtimeout is deprecated."
-                "Please migrate your unfilledtimeout settings to use 'entry' and 'exit' wording."
-            )
-            for o, n in [
-                ('buy', 'entry'),
-                ('sell', 'exit'),
-            ]:
-
-                process_deprecated_setting(conf, 'unfilledtimeout', o, 'unfilledtimeout', n)
+            process_deprecated_setting(conf, 'unfilledtimeout', o, 'unfilledtimeout', n)
 
 
 def _validate_pricing_rules(conf: Dict[str, Any]) -> None:
 
-    if conf.get('ask_strategy') or conf.get('bid_strategy'):
-        if conf.get('trading_mode', TradingMode.SPOT) != TradingMode.SPOT:
-            raise OperationalException(
-                "Please migrate your pricing settings to use the new wording.")
+    if not conf.get('ask_strategy') and not conf.get('bid_strategy'):
+        return
+    if conf.get('trading_mode', TradingMode.SPOT) != TradingMode.SPOT:
+        raise OperationalException(
+            "Please migrate your pricing settings to use the new wording.")
+    logger.warning(
+        "DEPRECATED: Using 'ask_strategy' and 'bid_strategy' is deprecated."
+        "Please migrate your settings to use 'entry_pricing' and 'exit_pricing'."
+    )
+    conf['entry_pricing'] = {}
+    for obj in list(conf.get('bid_strategy', {}).keys()):
+        if obj == 'ask_last_balance':
+            process_deprecated_setting(conf, 'bid_strategy', obj,
+                                       'entry_pricing', 'price_last_balance')
         else:
+            process_deprecated_setting(conf, 'bid_strategy', obj, 'entry_pricing', obj)
+    del conf['bid_strategy']
 
-            logger.warning(
-                "DEPRECATED: Using 'ask_strategy' and 'bid_strategy' is deprecated."
-                "Please migrate your settings to use 'entry_pricing' and 'exit_pricing'."
-            )
-            conf['entry_pricing'] = {}
-            for obj in list(conf.get('bid_strategy', {}).keys()):
-                if obj == 'ask_last_balance':
-                    process_deprecated_setting(conf, 'bid_strategy', obj,
-                                               'entry_pricing', 'price_last_balance')
-                else:
-                    process_deprecated_setting(conf, 'bid_strategy', obj, 'entry_pricing', obj)
-            del conf['bid_strategy']
-
-            conf['exit_pricing'] = {}
-            for obj in list(conf.get('ask_strategy', {}).keys()):
-                if obj == 'bid_last_balance':
-                    process_deprecated_setting(conf, 'ask_strategy', obj,
-                                               'exit_pricing', 'price_last_balance')
-                else:
-                    process_deprecated_setting(conf, 'ask_strategy', obj, 'exit_pricing', obj)
-            del conf['ask_strategy']
+    conf['exit_pricing'] = {}
+    for obj in list(conf.get('ask_strategy', {}).keys()):
+        if obj == 'bid_last_balance':
+            process_deprecated_setting(conf, 'ask_strategy', obj,
+                                       'exit_pricing', 'price_last_balance')
+        else:
+            process_deprecated_setting(conf, 'ask_strategy', obj, 'exit_pricing', obj)
+    del conf['ask_strategy']
 
 
 def _strategy_settings(conf: Dict[str, Any]) -> None:

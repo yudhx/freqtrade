@@ -220,7 +220,7 @@ def test_store_backtest_candles(testdatadir, mocker):
 
     assert dump_mock.call_count == 1
     assert isinstance(dump_mock.call_args_list[0][0][0], Path)
-    assert str(dump_mock.call_args_list[0][0][0]).endswith(str('_signals.pkl'))
+    assert str(dump_mock.call_args_list[0][0][0]).endswith('_signals.pkl')
 
     dump_mock.reset_mock()
     # mock file exporting
@@ -229,7 +229,7 @@ def test_store_backtest_candles(testdatadir, mocker):
     assert dump_mock.call_count == 1
     assert isinstance(dump_mock.call_args_list[0][0][0], Path)
     # result will be testdatadir / testresult-<timestamp>_signals.pkl
-    assert str(dump_mock.call_args_list[0][0][0]).endswith(str('_signals.pkl'))
+    assert str(dump_mock.call_args_list[0][0][0]).endswith('_signals.pkl')
     dump_mock.reset_mock()
 
 
@@ -239,10 +239,8 @@ def test_write_read_backtest_candles(tmpdir):
 
     # test directory exporting
     stored_file = store_backtest_signal_candles(Path(tmpdir), candle_dict)
-    scp = open(stored_file, "rb")
-    pickled_signal_candles = joblib.load(scp)
-    scp.close()
-
+    with open(stored_file, "rb") as scp:
+        pickled_signal_candles = joblib.load(scp)
     assert pickled_signal_candles.keys() == candle_dict.keys()
     assert pickled_signal_candles['DefStrat'].keys() == pickled_signal_candles['DefStrat'].keys()
     assert pickled_signal_candles['DefStrat']['UNITTEST/BTC'] \
@@ -253,10 +251,8 @@ def test_write_read_backtest_candles(tmpdir):
     # test file exporting
     filename = Path(tmpdir / 'testresult')
     stored_file = store_backtest_signal_candles(filename, candle_dict)
-    scp = open(stored_file, "rb")
-    pickled_signal_candles = joblib.load(scp)
-    scp.close()
-
+    with open(stored_file, "rb") as scp:
+        pickled_signal_candles = joblib.load(scp)
     assert pickled_signal_candles.keys() == candle_dict.keys()
     assert pickled_signal_candles['DefStrat'].keys() == pickled_signal_candles['DefStrat'].keys()
     assert pickled_signal_candles['DefStrat']['UNITTEST/BTC'] \
@@ -419,8 +415,7 @@ def test_text_table_strategy(testdatadir):
 
 def test_generate_edge_table():
 
-    results = {}
-    results['ETH/BTC'] = PairInfo(-0.01, 0.60, 2, 1, 3, 10, 60)
+    results = {'ETH/BTC': PairInfo(-0.01, 0.60, 2, 1, 3, 10, 60)}
     assert generate_edge_table(results).count('+') == 7
     assert generate_edge_table(results).count('| ETH/BTC |') == 1
     assert generate_edge_table(results).count(
