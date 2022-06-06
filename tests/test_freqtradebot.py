@@ -38,8 +38,7 @@ def patch_RPCManager(mocker) -> MagicMock:
     :return: RPCManager.send_msg MagicMock to track if this method is called
     """
     mocker.patch('freqtrade.rpc.telegram.Telegram', MagicMock())
-    rpc_mock = mocker.patch('freqtrade.freqtradebot.RPCManager.send_msg', MagicMock())
-    return rpc_mock
+    return mocker.patch('freqtrade.freqtradebot.RPCManager.send_msg', MagicMock())
 
 
 # Unit tests
@@ -158,7 +157,7 @@ def test_check_available_stake_amount(
 
     freqtrade = FreqtradeBot(default_conf_usdt)
 
-    for i in range(0, max_open):
+    for i in range(max_open):
 
         if expected[i] is not None:
             limit_buy_order_usdt_open['id'] = str(i)
@@ -469,7 +468,7 @@ def test_create_trade_no_signal(default_conf_usdt, fee, mocker) -> None:
     assert not freqtrade.create_trade('ETH/USDT')
 
 
-@pytest.mark.parametrize("max_open", range(0, 5))
+@pytest.mark.parametrize("max_open", range(5))
 @pytest.mark.parametrize("tradable_balance_ratio,modifier", [(1.0, 1), (0.99, 0.8), (0.5, 0.5)])
 def test_create_trades_multiple_trades(
     default_conf_usdt, ticker_usdt, fee, mocker, limit_buy_order_usdt_open,
@@ -1054,7 +1053,7 @@ def test_add_stoploss_on_exchange(mocker, default_conf_usdt, limit_order, is_sho
     freqtrade.exit_positions(trades)
     assert trade.stoploss_order_id == '13434334'
     assert stoploss.call_count == 1
-    assert trade.is_open is True
+    assert trade.is_open
 
 
 @pytest.mark.parametrize("is_short", [False, True])
@@ -1152,7 +1151,7 @@ def test_handle_stoploss_on_exchange(mocker, default_conf_usdt, fee, caplog, is_
     assert freqtrade.handle_stoploss_on_exchange(trade) is True
     assert log_has_re(r'STOP_LOSS_LIMIT is hit for Trade\(id=1, .*\)\.', caplog)
     assert trade.stoploss_order_id is None
-    assert trade.is_open is False
+    assert not trade.is_open
     caplog.clear()
 
     mocker.patch(
@@ -1208,7 +1207,7 @@ def test_handle_stoploss_on_exchange(mocker, default_conf_usdt, fee, caplog, is_
     mocker.patch('freqtrade.exchange.Exchange.stoploss', stoploss)
     assert freqtrade.handle_stoploss_on_exchange(trade) is False
     assert trade.stoploss_order_id is None
-    assert trade.is_open is False
+    assert not trade.is_open
     assert trade.exit_reason == str(ExitType.EMERGENCY_EXIT)
 
 
@@ -1252,7 +1251,7 @@ def test_handle_sle_cancel_cant_recreate(mocker, default_conf_usdt, fee, caplog,
     assert freqtrade.handle_stoploss_on_exchange(trade) is False
     assert log_has_re(r'Stoploss order was cancelled, but unable to recreate one.*', caplog)
     assert trade.stoploss_order_id is None
-    assert trade.is_open is True
+    assert trade.is_open
 
 
 @pytest.mark.parametrize("is_short", [False, True])
@@ -1661,12 +1660,15 @@ def test_handle_stoploss_on_exchange_custom_stop(
     # price jumped 2x
     mocker.patch(
         'freqtrade.exchange.Exchange.fetch_ticker',
-        MagicMock(return_value={
-            'bid': 4.38 if not is_short else 1.9 / 2,
-            'ask': 4.4 if not is_short else 2.2 / 2,
-            'last': 4.38 if not is_short else 1.9 / 2,
-        })
+        MagicMock(
+            return_value={
+                'bid': 1.9 / 2 if is_short else 4.38,
+                'ask': 2.2 / 2 if is_short else 4.4,
+                'last': 1.9 / 2 if is_short else 4.38,
+            }
+        ),
     )
+
 
     cancel_order_mock = MagicMock()
     stoploss_order_mock = MagicMock(return_value={'id': 13434334})
@@ -1680,8 +1682,8 @@ def test_handle_stoploss_on_exchange_custom_stop(
     stoploss_order_mock.assert_not_called()
 
     assert freqtrade.handle_trade(trade) is False
-    assert trade.stop_loss == 4.4 * 0.96 if not is_short else 1.1
-    assert trade.stop_loss_pct == -0.04 if not is_short else 0.04
+    assert 1.1 if is_short else trade.stop_loss == 4.4 * 0.96
+    assert 0.04 if is_short else trade.stop_loss_pct == -0.04
 
     # setting stoploss_on_exchange_interval to 0 seconds
     freqtrade.strategy.order_types['stoploss_on_exchange_interval'] = 0
@@ -1694,10 +1696,11 @@ def test_handle_stoploss_on_exchange_custom_stop(
         amount=pytest.approx(trade.amount),
         pair='ETH/USDT',
         order_types=freqtrade.strategy.order_types,
-        stop_price=4.4 * 0.96 if not is_short else 0.95 * 1.04,
+        stop_price=0.95 * 1.04 if is_short else 4.4 * 0.96,
         side=exit_side(is_short),
-        leverage=1.0
+        leverage=1.0,
     )
+
 
     # price fell below stoploss, so dry-run sells trade.
     mocker.patch(
@@ -1871,8 +1874,9 @@ def test_exit_positions(mocker, default_conf_usdt, limit_order, is_short, caplog
     assert n == 0
     # Test amount not modified by fee-logic
     assert not log_has(
-        'Applying fee to amount for Trade {} from 30.0 to 90.81'.format(trade), caplog
+        f'Applying fee to amount for Trade {trade} from 30.0 to 90.81', caplog
     )
+
 
     mocker.patch('freqtrade.freqtradebot.FreqtradeBot.get_real_amount', return_value=90.81)
     # test amount modified by fee-logic
@@ -2654,7 +2658,7 @@ def test_manage_open_orders_exit_usercustom(
     freqtrade.manage_open_orders()
     assert cancel_order_mock.call_count == 0
     assert rpc_mock.call_count == 0
-    assert open_trade_usdt.is_open is False
+    assert not open_trade_usdt.is_open
     assert freqtrade.strategy.check_exit_timeout.call_count == 1
     assert freqtrade.strategy.check_entry_timeout.call_count == 0
 
@@ -2664,7 +2668,7 @@ def test_manage_open_orders_exit_usercustom(
     freqtrade.manage_open_orders()
     assert cancel_order_mock.call_count == 0
     assert rpc_mock.call_count == 0
-    assert open_trade_usdt.is_open is False
+    assert not open_trade_usdt.is_open
     assert freqtrade.strategy.check_exit_timeout.call_count == 1
     assert freqtrade.strategy.check_entry_timeout.call_count == 0
 
@@ -2674,7 +2678,7 @@ def test_manage_open_orders_exit_usercustom(
     freqtrade.manage_open_orders()
     assert cancel_order_mock.call_count == 1
     assert rpc_mock.call_count == 1
-    assert open_trade_usdt.is_open is True
+    assert open_trade_usdt.is_open
     assert freqtrade.strategy.check_exit_timeout.call_count == 1
     assert freqtrade.strategy.check_entry_timeout.call_count == 0
 
@@ -2733,7 +2737,7 @@ def test_manage_open_orders_exit(
     freqtrade.manage_open_orders()
     assert cancel_order_mock.call_count == 1
     assert rpc_mock.call_count == 1
-    assert open_trade_usdt.is_open is True
+    assert open_trade_usdt.is_open
     # Custom user sell-timeout is never called
     assert freqtrade.strategy.check_exit_timeout.call_count == 0
     assert freqtrade.strategy.check_entry_timeout.call_count == 0
@@ -2769,7 +2773,7 @@ def test_check_handle_cancelled_exit(
     freqtrade.manage_open_orders()
     assert cancel_order_mock.call_count == 0
     assert rpc_mock.call_count == 1
-    assert open_trade_usdt.is_open is True
+    assert open_trade_usdt.is_open
     exit_name = 'Buy' if is_short else 'Sell'
     assert log_has_re(f"{exit_name} order cancelled on exchange for Trade.*", caplog)
 

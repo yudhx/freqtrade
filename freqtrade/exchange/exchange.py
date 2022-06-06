@@ -237,7 +237,7 @@ class Exchange:
             # Inject static headers after the above output to not confuse users.
             ccxt_kwargs = deep_merge_dicts({'headers': self._headers}, ccxt_kwargs)
         if ccxt_kwargs:
-            ex_config.update(ccxt_kwargs)
+            ex_config |= ccxt_kwargs
         try:
 
             api = getattr(ccxt_module, name.lower())(ex_config)
@@ -355,7 +355,7 @@ class Exchange:
         Return a list of supported quote currencies
         """
         markets = self.markets
-        return sorted(set([x['quote'] for _, x in markets.items()]))
+        return sorted({x['quote'] for _, x in markets.items()})
 
     def get_pair_quote_currency(self, pair: str) -> str:
         """ Return a pair's quote currency (base/quote:settlement) """
@@ -400,15 +400,14 @@ class Exchange:
             return DataFrame()
 
     def _get_contract_size(self, pair: str) -> float:
-        if self.trading_mode == TradingMode.FUTURES:
-            market = self.markets[pair]
-            contract_size: float = 1.0
-            if market['contractSize'] is not None:
-                # ccxt has contractSize in markets as string
-                contract_size = float(market['contractSize'])
-            return contract_size
-        else:
+        if self.trading_mode != TradingMode.FUTURES:
             return 1
+        market = self.markets[pair]
+        contract_size: float = 1.0
+        if market['contractSize'] is not None:
+            # ccxt has contractSize in markets as string
+            contract_size = float(market['contractSize'])
+        return contract_size
 
     def _trades_contracts_to_amount(self, trades: List) -> List:
         if len(trades) > 0 and 'symbol' in trades[0]:
@@ -585,10 +584,11 @@ class Exchange:
         """
         Checks if order-types configured in strategy/config are supported
         """
-        if any(v == 'market' for k, v in order_types.items()):
-            if not self.exchange_has('createMarketOrder'):
-                raise OperationalException(
-                    f'Exchange {self.name} does not support market orders.')
+        if any(
+            v == 'market' for k, v in order_types.items()
+        ) and not self.exchange_has('createMarketOrder'):
+            raise OperationalException(
+                f'Exchange {self.name} does not support market orders.')
 
         if (order_types.get("stoploss_on_exchange")
                 and not self._ft_has.get("stoploss_on_exchange", False)):
@@ -698,15 +698,11 @@ class Exchange:
         Rounds up
         """
         if self.markets[pair]['precision']['price']:
-            # price = float(decimal_to_precision(price, rounding_mode=ROUND,
-            #                                    precision=self.markets[pair]['precision']['price'],
-            #                                    counting_mode=self.precisionMode,
-            #                                    ))
             if self.precisionMode == TICK_SIZE:
                 precision = Precise(str(self.markets[pair]['precision']['price']))
                 price_str = Precise(str(price))
                 missing = price_str % precision
-                if not missing == Precise("0"):
+                if missing != Precise("0"):
                     price = round(float(str(price_str - missing + precision)), 14)
             else:
                 symbol_prec = self.markets[pair]['precision']['price']
@@ -720,10 +716,7 @@ class Exchange:
         Used in PriceFilter to calculate the 1pip movements.
         """
         precision = self.markets[pair]['precision']['price']
-        if self.precisionMode == TICK_SIZE:
-            return precision
-        else:
-            return 1 / pow(10, precision)
+        return precision if self.precisionMode == TICK_SIZE else 1 / pow(10, precision)
 
     def get_min_pair_stake_amount(
         self,
@@ -841,11 +834,12 @@ class Exchange:
         if dry_order["type"] == "market" and not dry_order.get("ft_order_type"):
             # Update market order pricing
             average = self.get_dry_market_fill_price(pair, side, amount, rate)
-            dry_order.update({
+            dry_order |= {
                 'average': average,
                 'filled': _amount,
-                'cost': (dry_order['amount'] * average) / leverage
-            })
+                'cost': (dry_order['amount'] * average) / leverage,
+            }
+
             dry_order = self.add_dry_order_fee(pair, dry_order)
 
         dry_order = self.check_dry_limit_order_filled(dry_order)
@@ -855,55 +849,52 @@ class Exchange:
         return dry_order
 
     def add_dry_order_fee(self, pair: str, dry_order: Dict[str, Any]) -> Dict[str, Any]:
-        dry_order.update({
-            'fee': {
-                'currency': self.get_pair_quote_currency(pair),
-                'cost': dry_order['cost'] * self.get_fee(pair),
-                'rate': self.get_fee(pair)
-            }
-        })
+        dry_order['fee'] = {
+            'currency': self.get_pair_quote_currency(pair),
+            'cost': dry_order['cost'] * self.get_fee(pair),
+            'rate': self.get_fee(pair),
+        }
+
         return dry_order
 
     def get_dry_market_fill_price(self, pair: str, side: str, amount: float, rate: float) -> float:
         """
         Get the market order fill price based on orderbook interpolation
         """
-        if self.exchange_has('fetchL2OrderBook'):
-            ob = self.fetch_l2_order_book(pair, 20)
-            ob_type = 'asks' if side == 'buy' else 'bids'
-            slippage = 0.05
-            max_slippage_val = rate * ((1 + slippage) if side == 'buy' else (1 - slippage))
+        if not self.exchange_has('fetchL2OrderBook'):
+            return rate
+        ob = self.fetch_l2_order_book(pair, 20)
+        ob_type = 'asks' if side == 'buy' else 'bids'
+        slippage = 0.05
+        max_slippage_val = rate * ((1 + slippage) if side == 'buy' else (1 - slippage))
 
-            remaining_amount = amount
-            filled_amount = 0.0
-            book_entry_price = 0.0
-            for book_entry in ob[ob_type]:
-                book_entry_price = book_entry[0]
-                book_entry_coin_volume = book_entry[1]
-                if remaining_amount > 0:
-                    if remaining_amount < book_entry_coin_volume:
-                        # Orderbook at this slot bigger than remaining amount
-                        filled_amount += remaining_amount * book_entry_price
-                        break
-                    else:
-                        filled_amount += book_entry_coin_volume * book_entry_price
-                    remaining_amount -= book_entry_coin_volume
-                else:
-                    break
-            else:
-                # If remaining_amount wasn't consumed completely (break was not called)
+        remaining_amount = amount
+        filled_amount = 0.0
+        book_entry_price = 0.0
+        for book_entry in ob[ob_type]:
+            book_entry_price = book_entry[0]
+            book_entry_coin_volume = book_entry[1]
+            if remaining_amount <= 0:
+                break
+            if remaining_amount < book_entry_coin_volume:
+                # Orderbook at this slot bigger than remaining amount
                 filled_amount += remaining_amount * book_entry_price
-            forecast_avg_filled_price = max(filled_amount, 0) / amount
-            # Limit max. slippage to specified value
-            if side == 'buy':
-                forecast_avg_filled_price = min(forecast_avg_filled_price, max_slippage_val)
-
+                break
             else:
-                forecast_avg_filled_price = max(forecast_avg_filled_price, max_slippage_val)
+                filled_amount += book_entry_coin_volume * book_entry_price
+            remaining_amount -= book_entry_coin_volume
+        else:
+            # If remaining_amount wasn't consumed completely (break was not called)
+            filled_amount += remaining_amount * book_entry_price
+        forecast_avg_filled_price = max(filled_amount, 0) / amount
+        # Limit max. slippage to specified value
+        if side == 'buy':
+            forecast_avg_filled_price = min(forecast_avg_filled_price, max_slippage_val)
 
-            return self.price_to_precision(pair, forecast_avg_filled_price)
+        else:
+            forecast_avg_filled_price = max(forecast_avg_filled_price, max_slippage_val)
 
-        return rate
+        return self.price_to_precision(pair, forecast_avg_filled_price)
 
     def _is_dry_limit_order_filled(self, pair: str, side: str, limit: float) -> bool:
         if not self.exchange_has('fetchL2OrderBook'):
@@ -934,11 +925,12 @@ class Exchange:
                 and not order.get('ft_order_type')):
             pair = order['symbol']
             if self._is_dry_limit_order_filled(pair, order['side'], order['price']):
-                order.update({
+                order |= {
                     'status': 'closed',
                     'filled': order['amount'],
                     'remaining': 0,
-                })
+                }
+
                 self.add_dry_order_fee(pair, order)
 
         return order
@@ -954,8 +946,7 @@ class Exchange:
             return order
         except KeyError as e:
             from freqtrade.persistence import Order
-            order = Order.order_by_id(order_id)
-            if order:
+            if order := Order.order_by_id(order_id):
                 ccxt_order = order.to_ccxt_object()
                 self._dry_run_open_orders[order_id] = ccxt_order
                 return ccxt_order
@@ -999,8 +990,7 @@ class Exchange:
         time_in_force: str = 'gtc',
     ) -> Dict:
         if self._config['dry_run']:
-            dry_order = self.create_dry_run_order(pair, ordertype, side, amount, rate, leverage)
-            return dry_order
+            return self.create_dry_run_order(pair, ordertype, side, amount, rate, leverage)
 
         params = self._get_params(side, ordertype, leverage, reduceOnly, time_in_force)
 
@@ -1055,7 +1045,7 @@ class Exchange:
 
         available_order_Types: Dict[str, str] = self._ft_has["stoploss_order_types"]
 
-        if user_order_type in available_order_Types.keys():
+        if user_order_type in available_order_Types:
             ordertype = available_order_Types[user_order_type]
         else:
             # Otherwise pick only one available
@@ -1116,7 +1106,7 @@ class Exchange:
             limit_rate = self.price_to_precision(pair, limit_rate)
 
         if self._config['dry_run']:
-            dry_order = self.create_dry_run_order(
+            return self.create_dry_run_order(
                 pair,
                 ordertype,
                 side,
@@ -1125,7 +1115,7 @@ class Exchange:
                 stop_loss=True,
                 leverage=leverage,
             )
-            return dry_order
+
 
         try:
             params = self._get_stop_params(ordertype=ordertype, stop_price=stop_price_norm)
@@ -1359,8 +1349,7 @@ class Exchange:
         if not self.exchange_has('fetchBidsAsks'):
             return {}
         if cached:
-            tickers = self._fetch_tickers_cache.get('fetch_bids_asks')
-            if tickers:
+            if tickers := self._fetch_tickers_cache.get('fetch_bids_asks'):
                 return tickers
         try:
             tickers = self._api.fetch_bids_asks(symbols)
@@ -1385,8 +1374,7 @@ class Exchange:
         :return: fetch_tickers result
         """
         if cached:
-            tickers = self._fetch_tickers_cache.get('fetch_tickers')
-            if tickers:
+            if tickers := self._fetch_tickers_cache.get('fetch_tickers'):
                 return tickers
         try:
             tickers = self._api.fetch_tickers(symbols)
@@ -1412,8 +1400,7 @@ class Exchange:
             if (pair not in self.markets or
                     self.markets[pair].get('active', False) is False):
                 raise ExchangeError(f"Pair {pair} not available")
-            data = self._api.fetch_ticker(pair)
-            return data
+            return self._api.fetch_ticker(pair)
         except ccxt.DDoSProtection as e:
             raise DDosProtection(e) from e
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
@@ -1573,7 +1560,7 @@ class Exchange:
         try:
             # Allow 5s offset to catch slight time offsets (discovered in #1185)
             # since needs to be int in milliseconds
-            _params = params if params else {}
+            _params = params or {}
             my_trades = self._api.fetch_my_trades(
                 pair, int((since.replace(tzinfo=timezone.utc).timestamp() - 5) * 1000),
                 params=_params)
@@ -1623,13 +1610,17 @@ class Exchange:
         :param order: Order or trade (one trade) dict
         :return: True if the fee substructure contains currency and cost, false otherwise
         """
-        if not isinstance(order, dict):
-            return False
-        return ('fee' in order and order['fee'] is not None
+        return (
+            (
+                'fee' in order
+                and order['fee'] is not None
                 and (order['fee'].keys() >= {'currency', 'cost'})
                 and order['fee']['currency'] is not None
                 and order['fee']['cost'] is not None
-                )
+            )
+            if isinstance(order, dict)
+            else False
+        )
 
     def calculate_fee_rate(self, order: Dict) -> Optional[float]:
         """
@@ -2146,36 +2137,42 @@ class Exchange:
             raise OperationalException(e) from e
 
     def load_leverage_tiers(self) -> Dict[str, List[Dict]]:
-        if self.trading_mode == TradingMode.FUTURES:
-            if self.exchange_has('fetchLeverageTiers'):
-                # Fetch all leverage tiers at once
-                return self.get_leverage_tiers()
-            elif self.exchange_has('fetchMarketLeverageTiers'):
-                # Must fetch the leverage tiers for each market separately
-                # * This is slow(~45s) on Okx, makes ~90 api calls to load all linear swap markets
-                markets = self.markets
-                symbols = []
+        if self.trading_mode == TradingMode.FUTURES and self.exchange_has(
+            'fetchLeverageTiers'
+        ):
+            # Fetch all leverage tiers at once
+            return self.get_leverage_tiers()
+        elif (
+            self.trading_mode == TradingMode.FUTURES
+            and not self.exchange_has('fetchLeverageTiers')
+            and self.exchange_has('fetchMarketLeverageTiers')
+        ):
+            # Must fetch the leverage tiers for each market separately
+            # * This is slow(~45s) on Okx, makes ~90 api calls to load all linear swap markets
+            markets = self.markets
+            symbols = [
+                symbol
+                for symbol, market in markets.items()
+                if (
+                    self.market_is_future(market)
+                    and market['quote'] == self._config['stake_currency']
+                )
+            ]
 
-                for symbol, market in markets.items():
-                    if (self.market_is_future(market)
-                            and market['quote'] == self._config['stake_currency']):
-                        symbols.append(symbol)
 
-                tiers: Dict[str, List[Dict]] = {}
+            tiers: Dict[str, List[Dict]] = {}
 
-                # Be verbose here, as this delays startup by ~1 minute.
-                logger.info(
-                    f"Initializing leverage_tiers for {len(symbols)} markets. "
-                    "This will take about a minute.")
+            # Be verbose here, as this delays startup by ~1 minute.
+            logger.info(
+                f"Initializing leverage_tiers for {len(symbols)} markets. "
+                "This will take about a minute.")
 
-                for symbol in sorted(symbols):
-                    tiers[symbol] = self.get_market_leverage_tiers(symbol)
+            for symbol in sorted(symbols):
+                tiers[symbol] = self.get_market_leverage_tiers(symbol)
 
-                logger.info(f"Done initializing {len(symbols)} markets.")
+            logger.info(f"Done initializing {len(symbols)} markets.")
 
-                return tiers
-            else:
-                return {}
+            return tiers
         else:
             return {}
 
@@ -2186,9 +2183,7 @@ class Exchange:
         """
         leverage_tiers = self.load_leverage_tiers()
         for pair, tiers in leverage_tiers.items():
-            pair_tiers = []
-            for tier in tiers:
-                pair_tiers.append(self.parse_leverage_tier(tier))
+            pair_tiers = [self.parse_leverage_tier(tier) for tier in tiers]
             self._leverage_tiers[pair] = pair_tiers
 
     def parse_leverage_tier(self, tier) -> Dict:
@@ -2257,12 +2252,10 @@ class Exchange:
                         # }
                         #
 
-                else:  # if on the last tier
-                    if stake_amount > tier['max']:  # If stake is > than max tradeable amount
-                        raise InvalidOrderException(f'Amount {stake_amount} too high for {pair}')
-                    else:
-                        return tier['lev']
-
+                elif stake_amount > tier['max']:  # If stake is > than max tradeable amount
+                    raise InvalidOrderException(f'Amount {stake_amount} too high for {pair}')
+                else:
+                    return lev
             raise OperationalException(
                 'Looped through all tiers without finding a max leverage. Should never be reached'
             )
@@ -2324,7 +2317,7 @@ class Exchange:
             self.trading_mode == TradingMode.FUTURES
         ):
             wallet_balance = (amount * open_rate) / leverage
-            isolated_liq = self.get_or_calculate_liquidation_price(
+            return self.get_or_calculate_liquidation_price(
                 pair=pair,
                 open_rate=open_rate,
                 is_short=is_short,
@@ -2333,7 +2326,7 @@ class Exchange:
                 mm_ex_1=0.0,
                 upnl_ex_1=0.0,
             )
-            return isolated_liq
+
         else:
             raise OperationalException(
                 "Freqtrade only supports isolated futures for leverage trading")
@@ -2430,24 +2423,23 @@ class Exchange:
         if futures_funding_rate is None:
             return mark_rates.merge(
                 funding_rates, on='date', how="inner", suffixes=["_mark", "_fund"])
-        else:
-            if len(funding_rates) == 0:
-                # No funding rate candles - full fillup with fallback variable
-                mark_rates['open_fund'] = futures_funding_rate
-                return mark_rates.rename(
-                        columns={'open': 'open_mark',
-                                 'close': 'close_mark',
-                                 'high': 'high_mark',
-                                 'low': 'low_mark',
-                                 'volume': 'volume_mark'})
+        if len(funding_rates) == 0:
+            # No funding rate candles - full fillup with fallback variable
+            mark_rates['open_fund'] = futures_funding_rate
+            return mark_rates.rename(
+                    columns={'open': 'open_mark',
+                             'close': 'close_mark',
+                             'high': 'high_mark',
+                             'low': 'low_mark',
+                             'volume': 'volume_mark'})
 
-            else:
-                # Fill up missing funding_rate candles with fallback value
-                combined = mark_rates.merge(
-                    funding_rates, on='date', how="outer", suffixes=["_mark", "_fund"]
-                    )
-                combined['open_fund'] = combined['open_fund'].fillna(futures_funding_rate)
-                return combined
+        else:
+            # Fill up missing funding_rate candles with fallback value
+            combined = mark_rates.merge(
+                funding_rates, on='date', how="outer", suffixes=["_mark", "_fund"]
+                )
+            combined['open_fund'] = combined['open_fund'].fillna(futures_funding_rate)
+            return combined
 
     def calculate_funding_fees(
         self,
@@ -2488,12 +2480,14 @@ class Exchange:
         :param open_date: Open date of the trade
         """
         if self.trading_mode == TradingMode.FUTURES:
-            if self._config['dry_run']:
-                funding_fees = self._fetch_and_calculate_funding_fees(
-                    pair, amount, is_short, open_date)
-            else:
-                funding_fees = self._get_funding_fees_from_exchange(pair, open_date)
-            return funding_fees
+            return (
+                self._fetch_and_calculate_funding_fees(
+                    pair, amount, is_short, open_date
+                )
+                if self._config['dry_run']
+                else self._get_funding_fees_from_exchange(pair, open_date)
+            )
+
         else:
             return 0.0
 
@@ -2533,11 +2527,10 @@ class Exchange:
         else:
             try:
                 positions = self._api.fetch_positions([pair])
-                if len(positions) > 0:
-                    pos = positions[0]
-                    isolated_liq = pos['liquidationPrice']
-                else:
+                if len(positions) <= 0:
                     return None
+                pos = positions[0]
+                isolated_liq = pos['liquidationPrice']
             except ccxt.DDoSProtection as e:
                 raise DDosProtection(e) from e
             except (ccxt.NetworkError, ccxt.ExchangeError) as e:
@@ -2593,22 +2586,24 @@ class Exchange:
         taker_fee_rate = market['taker']
         mm_ratio, _ = self.get_maintenance_ratio_and_amt(pair, position)
 
-        if self.trading_mode == TradingMode.FUTURES and self.margin_mode == MarginMode.ISOLATED:
-
-            if market['inverse']:
-                raise OperationalException(
-                    "Freqtrade does not yet support inverse contracts")
-
-            value = wallet_balance / position
-
-            mm_ratio_taker = (mm_ratio + taker_fee_rate)
-            if is_short:
-                return (open_rate + value) / (1 + mm_ratio_taker)
-            else:
-                return (open_rate - value) / (1 - mm_ratio_taker)
-        else:
+        if (
+            self.trading_mode != TradingMode.FUTURES
+            or self.margin_mode != MarginMode.ISOLATED
+        ):
             raise OperationalException(
                 "Freqtrade only supports isolated futures for leverage trading")
+        if market['inverse']:
+            raise OperationalException(
+                "Freqtrade does not yet support inverse contracts")
+
+        value = wallet_balance / position
+
+        mm_ratio_taker = (mm_ratio + taker_fee_rate)
+        return (
+            (open_rate + value) / (1 + mm_ratio_taker)
+            if is_short
+            else (open_rate - value) / (1 - mm_ratio_taker)
+        )
 
     def get_maintenance_ratio_and_amt(
         self,
@@ -2623,26 +2618,24 @@ class Exchange:
         :return: (maintenance margin ratio, maintenance amount)
         """
 
-        if (self._config.get('runmode') in OPTIMIZE_MODES
-                or self.exchange_has('fetchLeverageTiers')
-                or self.exchange_has('fetchMarketLeverageTiers')):
-
-            if pair not in self._leverage_tiers:
-                raise InvalidOrderException(
-                    f"Maintenance margin rate for {pair} is unavailable for {self.name}"
-                )
-
-            pair_tiers = self._leverage_tiers[pair]
-
-            for tier in reversed(pair_tiers):
-                if nominal_value >= tier['min']:
-                    return (tier['mmr'], tier['maintAmt'])
-
-            raise OperationalException("nominal value can not be lower than 0")
-            # The lowest notional_floor for any pair in fetch_leverage_tiers is always 0 because it
-            # describes the min amt for a tier, and the lowest tier will always go down to 0
-        else:
+        if (
+            self._config.get('runmode') not in OPTIMIZE_MODES
+            and not self.exchange_has('fetchLeverageTiers')
+            and not self.exchange_has('fetchMarketLeverageTiers')
+        ):
             raise OperationalException(f"Cannot get maintenance ratio using {self.name}")
+        if pair not in self._leverage_tiers:
+            raise InvalidOrderException(
+                f"Maintenance margin rate for {pair} is unavailable for {self.name}"
+            )
+
+        pair_tiers = self._leverage_tiers[pair]
+
+        for tier in reversed(pair_tiers):
+            if nominal_value >= tier['min']:
+                return (tier['mmr'], tier['maintAmt'])
+
+        raise OperationalException("nominal value can not be lower than 0")
 
 
 def is_exchange_known_ccxt(exchange_name: str, ccxt_module: CcxtModuleType = None) -> bool:
@@ -2672,8 +2665,9 @@ def validate_exchange(exchange: str) -> Tuple[bool, str]:
     ex_mod = getattr(ccxt, exchange.lower())()
     if not ex_mod or not ex_mod.has:
         return False, ''
-    missing = [k for k in EXCHANGE_HAS_REQUIRED if ex_mod.has.get(k) is not True]
-    if missing:
+    if missing := [
+        k for k in EXCHANGE_HAS_REQUIRED if ex_mod.has.get(k) is not True
+    ]:
         return False, f"missing: {', '.join(missing)}"
 
     missing_opt = [k for k in EXCHANGE_HAS_OPTIONAL if not ex_mod.has.get(k)]
@@ -2691,10 +2685,7 @@ def validate_exchanges(all_exchanges: bool) -> List[Tuple[str, bool, str]]:
     :return: List of tuples with exchangename, valid, reason.
     """
     exchanges = ccxt_exchanges() if all_exchanges else available_exchanges()
-    exchanges_valid = [
-        (e, *validate_exchange(e)) for e in exchanges
-    ]
-    return exchanges_valid
+    return [(e, *validate_exchange(e)) for e in exchanges]
 
 
 def timeframe_to_seconds(timeframe: str) -> int:
@@ -2763,8 +2754,9 @@ def date_minus_candles(
         date = datetime.now(timezone.utc)
 
     tf_min = timeframe_to_minutes(timeframe)
-    new_date = timeframe_to_prev_date(timeframe, date) - timedelta(minutes=tf_min * candle_count)
-    return new_date
+    return timeframe_to_prev_date(timeframe, date) - timedelta(
+        minutes=tf_min * candle_count
+    )
 
 
 def market_is_active(market: Dict) -> bool:

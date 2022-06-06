@@ -24,9 +24,7 @@ async def ui_version():
     uibase = Path(__file__).parent / 'ui/installed/'
     version = read_ui_version(uibase)
 
-    return {
-        "version": version if version else "not_installed",
-    }
+    return {"version": version or "not_installed"}
 
 
 def is_relative_to(path, base) -> bool:

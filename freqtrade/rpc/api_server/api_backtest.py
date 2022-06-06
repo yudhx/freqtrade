@@ -108,7 +108,6 @@ async def api_start_backtest(bt_settings: BacktestRequest, background_tasks: Bac
 
         except DependencyException as e:
             logger.info(f"Backtesting caused an error: {e}")
-            pass
         finally:
             ApiServer._bgtask_running = False
 

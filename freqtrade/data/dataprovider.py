@@ -80,14 +80,16 @@ class DataProvider:
         """
         _candle_type = CandleType.from_string(
             candle_type) if candle_type != '' else self._config['candle_type_def']
-        saved_pair = (pair, str(timeframe), _candle_type)
+        saved_pair = pair, timeframe, _candle_type
         if saved_pair not in self.__cached_pairs_backtesting:
             timerange = TimeRange.parse_timerange(None if self._config.get(
                 'timerange') is None else str(self._config.get('timerange')))
             # Move informative start time respecting startup_candle_count
             timerange.subtract_start(
-                timeframe_to_seconds(str(timeframe)) * self._config.get('startup_candle_count', 0)
+                timeframe_to_seconds(timeframe)
+                * self._config.get('startup_candle_count', 0)
             )
+
             self.__cached_pairs_backtesting[saved_pair] = load_pair_history(
                 pair=pair,
                 timeframe=timeframe or self._config['timeframe'],
@@ -136,17 +138,16 @@ class DataProvider:
             Returns empty dataframe and Epoch 0 (1970-01-01) if no dataframe was cached.
         """
         pair_key = (pair, timeframe, self._config.get('candle_type_def', CandleType.SPOT))
-        if pair_key in self.__cached_pairs:
-            if self.runmode in (RunMode.DRY_RUN, RunMode.LIVE):
-                df, date = self.__cached_pairs[pair_key]
-            else:
-                df, date = self.__cached_pairs[pair_key]
-                if self.__slice_index is not None:
-                    max_index = self.__slice_index
-                    df = df.iloc[max(0, max_index - MAX_DATAFRAME_CANDLES):max_index]
-            return df, date
-        else:
+        if pair_key not in self.__cached_pairs:
             return (DataFrame(), datetime.fromtimestamp(0, tz=timezone.utc))
+        df, date = self.__cached_pairs[pair_key]
+        if (
+            self.runmode not in (RunMode.DRY_RUN, RunMode.LIVE)
+            and self.__slice_index is not None
+        ):
+            max_index = self.__slice_index
+            df = df.iloc[max(0, max_index - MAX_DATAFRAME_CANDLES):max_index]
+        return df, date
 
     @property
     def runmode(self) -> RunMode:

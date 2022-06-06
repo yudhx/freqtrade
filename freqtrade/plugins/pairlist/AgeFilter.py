@@ -30,7 +30,7 @@ class AgeFilter(IPairList):
         self._symbolsCheckFailed = PeriodicCache(maxsize=1000, ttl=86_400)
 
         self._min_days_listed = pairlistconfig.get('min_days_listed', 10)
-        self._max_days_listed = pairlistconfig.get('max_days_listed', None)
+        self._max_days_listed = pairlistconfig.get('max_days_listed')
 
         candle_limit = exchange.ohlcv_candle_limit('1d', self._config['candle_type_def'])
         if self._min_days_listed < 1:
@@ -80,9 +80,7 @@ class AgeFilter(IPairList):
             # Remove pairs that have been removed before
             return [p for p in pairlist if p not in self._symbolsCheckFailed]
 
-        since_days = -(
-            self._max_days_listed if self._max_days_listed else self._min_days_listed
-        ) - 1
+        since_days = (-self._max_days_listed or self._min_days_listed - 1)
         since_ms = int(arrow.utcnow()
                        .floor('day')
                        .shift(days=since_days)

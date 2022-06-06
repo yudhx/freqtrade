@@ -61,7 +61,7 @@ class Webhook(RPCHandler):
                                  RPCMessageType.WARNING):
                 valuedict = whconfig.get('webhookstatus', None)
             else:
-                raise NotImplementedError('Unknown message type: {}'.format(msg['type']))
+                raise NotImplementedError(f"Unknown message type: {msg['type']}")
             if not valuedict:
                 logger.info("Message type '%s' not configured for webhooks", msg['type'])
                 return
@@ -94,7 +94,7 @@ class Webhook(RPCHandler):
                     response = post(self._url, data=payload['data'],
                                     headers={'Content-Type': 'text/plain'})
                 else:
-                    raise NotImplementedError('Unknown format: {}'.format(self._format))
+                    raise NotImplementedError(f'Unknown format: {self._format}')
 
                 # Throw a RequestException if the post was not successful
                 response.raise_for_status()
